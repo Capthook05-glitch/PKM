@@ -12,6 +12,7 @@ types without leaving the form.
 """
 
 import streamlit as st
+from styles import inject_css
 from database import (
     init_db,
     get_conn,
@@ -26,12 +27,17 @@ from utils import fetch_page_title, parse_tags, parse_kindle_clippings
 
 st.set_page_config(page_title="Capture", layout="wide")
 
+inject_css()
 init_db()
 
-st.title("Capture")
-st.caption("Add something to your knowledge base.")
+st.markdown("""
+<div style="margin-bottom:20px;padding-bottom:16px;border-bottom:1px solid #1e1f2e;">
+    <h1 style="font-size:1.75rem;font-weight:700;color:#e8eaf0;margin:0 0 4px;">Capture</h1>
+    <p style="color:#525870;font-size:0.875rem;margin:0;">Add something to your knowledge base.</p>
+</div>
+""", unsafe_allow_html=True)
 
-tab_item, tab_highlight, tab_import = st.tabs(["Item", "Highlight", "Import"])
+tab_item, tab_highlight, tab_import = st.tabs(["📥 Item", "✂️ Highlight", "📤 Import"])
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────

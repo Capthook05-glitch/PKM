@@ -17,6 +17,7 @@ import tempfile
 import streamlit as st
 import streamlit.components.v1 as components
 
+from styles import inject_css
 from database import (
     get_conn,
     get_graph_data,
@@ -26,6 +27,7 @@ from database import (
 
 st.set_page_config(page_title="Knowledge Graph", layout="wide")
 
+inject_css()
 init_db()
 
 st.title("Knowledge Graph")

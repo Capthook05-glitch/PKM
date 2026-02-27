@@ -21,6 +21,7 @@ connections for writes, then call st.rerun().
 import streamlit as st
 
 from ai import process_item, process_highlight
+from styles import inject_css
 from database import (
     add_item_link,
     apply_suggested_tags_to_highlight,
@@ -50,10 +51,17 @@ from utils import format_date, item_to_markdown, safe_filename
 
 st.set_page_config(page_title="Library", layout="wide")
 
+inject_css()
 init_db()
 
-st.title("Library")
-st.caption("Everything you've captured — browse, process, and annotate.")
+st.markdown("""
+<div style="margin-bottom:20px;padding-bottom:16px;border-bottom:1px solid #1e1f2e;">
+    <h1 style="font-size:1.75rem;font-weight:700;color:#e8eaf0;margin:0 0 4px;">Library</h1>
+    <p style="color:#525870;font-size:0.875rem;margin:0;">
+        Everything you've captured — browse, process, and annotate.
+    </p>
+</div>
+""", unsafe_allow_html=True)
 
 # ─── Sidebar ──────────────────────────────────────────────────────────────────
 
@@ -125,6 +133,35 @@ if "confirm_delete_item" not in st.session_state:
     st.session_state.confirm_delete_item = None
 if "confirm_delete_highlight" not in st.session_state:
     st.session_state.confirm_delete_highlight = None
+
+
+# ─── HTML helpers ──────────────────────────────────────────────────────────────
+
+def _tag_pills_html(tags: list) -> str:
+    """Return an HTML string of colored tag pills."""
+    if not tags:
+        return '<span style="color:#525870;font-size:0.8rem;font-style:italic;">no tags</span>'
+    return "".join(
+        f'<span style="background:rgba(74,144,217,0.12);color:#7eb8f7;border-radius:4px;'
+        f'padding:2px 8px;font-size:0.77rem;margin-right:4px;display:inline-block;">{t}</span>'
+        for t in tags
+    )
+
+
+def _type_badge_html(ct: str) -> str:
+    TYPE_COLORS = {
+        "article":      "#4a90d9",
+        "book":         "#9b59b6",
+        "podcast":      "#f39c12",
+        "video":        "#e74c3c",
+        "note / thought": "#27ae60",
+        "fleeting note": "#7f8c8d",
+    }
+    color = TYPE_COLORS.get(ct.lower(), "#4a90d9")
+    return (
+        f'<span style="background:rgba({",".join(str(int(color.lstrip("#")[i:i+2], 16)) for i in (0,2,4))},0.15);'
+        f'color:{color};border-radius:5px;padding:2px 8px;font-size:0.73rem;font-weight:600;">{ct}</span>'
+    )
 
 
 # ─── Card renderers ────────────────────────────────────────────────────────────
@@ -338,13 +375,33 @@ def render_item_card(item, tags: list, related_items: list = None, links: list =
     entity_id = f"item_{item_id}"
     ct = item["content_type_name"] or "Unknown"
     date = format_date(item["created_at"])
-    tag_str = "  ".join(f"`{t}`" for t in tags) if tags else "*no tags*"
 
-    # Show impact rating in the header if it's been set
-    stars = ("  ★" * item["impact_rating"]) if item["impact_rating"] else ""
-    header = f"**{item['title']}** &nbsp;·&nbsp; `{ct}` &nbsp;·&nbsp; {date}{stars}"
+    # Plain-text expander header
+    stars_txt = ("★" * item["impact_rating"]) if item["impact_rating"] else ""
+    header = f"{item['title']}  ·  {ct}  ·  {date}  {stars_txt}"
 
     with st.expander(header):
+
+        # ── Rich metadata strip ───────────────────────────────────────
+        stars_html = "".join(
+            ['<span style="color:#f39c12;font-size:0.8rem;">★</span>'] * (item["impact_rating"] or 0)
+            + ['<span style="color:#2a2b3d;font-size:0.8rem;">☆</span>'] * (5 - (item["impact_rating"] or 0))
+        ) if item["impact_rating"] else ""
+
+        tag_preview = tags[:5]
+        more_count = len(tags) - 5
+        more_html = f'<span style="color:#525870;font-size:0.72rem;">+{more_count} more</span>' if more_count > 0 else ""
+
+        st.markdown(f"""
+<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;
+            padding:0 0 12px 0;border-bottom:1px solid #1e1f2e;margin-bottom:12px;">
+    {_type_badge_html(ct)}
+    <span style="color:#525870;font-size:0.8rem;">{date}</span>
+    {"<span>" + stars_html + "</span>" if stars_html else ""}
+    <div style="flex:1"></div>
+    {_tag_pills_html(tag_preview)}{more_html}
+</div>
+""", unsafe_allow_html=True)
 
         # ── Source and body ───────────────────────────────────────────
         if item["url"]:
@@ -356,7 +413,7 @@ def render_item_card(item, tags: list, related_items: list = None, links: list =
             st.caption("No notes added. Process with AI to generate a summary.")
 
         # ── Tags ──────────────────────────────────────────────────────
-        st.markdown(f"**Tags:** {tag_str}")
+        st.markdown(f'<div style="margin:8px 0 4px;">{_tag_pills_html(tags)}</div>', unsafe_allow_html=True)
 
         # ── Suggestions (from the most recent AI run this session) ────
         suggestions = st.session_state.get(f"suggestions_{entity_id}")
@@ -449,28 +506,36 @@ def render_highlight_card(h, tags: list):
     h_id = h["id"]
     entity_id = f"highlight_{h_id}"
     date = format_date(h["created_at"])
-    tag_str = "  ".join(f"`{t}`" for t in tags) if tags else "*no tags*"
 
-    preview = h["text"][:80] + ("..." if len(h["text"]) > 80 else "")
-    source_part = f" — *{h['source_info']}*" if h["source_info"] else ""
-    stars = ("  ★" * h["impact_rating"]) if h["impact_rating"] else ""
-    header = f'"{preview}"{source_part} &nbsp;·&nbsp; {date}{stars}'
+    preview = h["text"][:80] + ("…" if len(h["text"]) > 80 else "")
+    source_part = f" — {h['source_info']}" if h["source_info"] else ""
+    header = f'"{preview}"{source_part}'
 
     with st.expander(header):
 
-        # ── Full quote ────────────────────────────────────────────────
-        st.markdown(f"> {h['text']}")
+        # ── Full quote styled ─────────────────────────────────────────
+        st.markdown(f"""
+<div style="border-left:3px solid #4a90d9;padding:12px 0 12px 20px;margin:0 0 12px 0;">
+    <p style="font-size:1.02rem;color:#e8eaf0;line-height:1.65;font-style:italic;margin:0;">
+        {h['text']}
+    </p>
+</div>
+""", unsafe_allow_html=True)
 
         meta = []
         if h["source_info"]:
             meta.append(h["source_info"])
         if h["parent_item_title"]:
-            meta.append(f"from: **{h['parent_item_title']}**")
+            meta.append(f"from {h['parent_item_title']}")
         if meta:
-            st.caption(" &nbsp;·&nbsp; ".join(meta))
+            st.markdown(
+                f'<div style="color:#525870;font-size:0.82rem;margin-bottom:10px;">'
+                f'— {" · ".join(meta)}</div>',
+                unsafe_allow_html=True,
+            )
 
         # ── Tags ──────────────────────────────────────────────────────
-        st.markdown(f"**Tags:** {tag_str}")
+        st.markdown(f'<div style="margin:4px 0 8px;">{_tag_pills_html(tags)}</div>', unsafe_allow_html=True)
 
         # ── Suggestions ───────────────────────────────────────────────
         suggestions = st.session_state.get(f"suggestions_{entity_id}")

@@ -18,6 +18,7 @@ Behaviour, etc.).
 
 import streamlit as st
 
+from styles import inject_css
 from database import (
     add_item_to_canvas,
     create_canvas,
@@ -35,10 +36,17 @@ from utils import format_date
 
 st.set_page_config(page_title="Canvas", layout="wide")
 
+inject_css()
 init_db()
 
-st.title("Canvas")
-st.caption("Organise your ideas into named boards. Think in clusters, not just lists.")
+st.markdown("""
+<div style="margin-bottom:20px;padding-bottom:16px;border-bottom:1px solid #1e1f2e;">
+    <h1 style="font-size:1.75rem;font-weight:700;color:#e8eaf0;margin:0 0 4px;">Canvas</h1>
+    <p style="color:#525870;font-size:0.875rem;margin:0;">
+        Organise your ideas into named boards. Think in clusters, not just lists.
+    </p>
+</div>
+""", unsafe_allow_html=True)
 
 # ─── Sidebar: canvas management ────────────────────────────────────────────────
 
@@ -173,7 +181,24 @@ st.markdown("---")
 # ─── Canvas board ──────────────────────────────────────────────────────────────
 
 if not canvas_rows:
-    st.info("This canvas is empty. Add items from the panel above.")
+    st.markdown("""
+<div style="
+    text-align:center;
+    padding:56px 40px;
+    background:#1a1b26;
+    border:1px dashed #2a2b3d;
+    border-radius:12px;
+    margin:24px 0;
+">
+    <div style="font-size:2.4rem;margin-bottom:12px;">🗂️</div>
+    <div style="font-size:1rem;font-weight:600;color:#e8eaf0;margin-bottom:8px;">
+        This canvas is empty
+    </div>
+    <div style="font-size:0.875rem;color:#525870;max-width:360px;margin:0 auto;">
+        Open "Add items to this canvas" above to place your first card on the board.
+    </div>
+</div>
+""", unsafe_allow_html=True)
     st.stop()
 
 # Group by cluster
@@ -194,12 +219,12 @@ board_cols = st.columns(len(active_keys))
 # ─── Card colour mapping ───────────────────────────────────────────────────────
 
 COLOR_BG = {
-    "blue":   "#1e3a5f",
-    "green":  "#1a3d2b",
-    "orange": "#4a2e0a",
-    "red":    "#4a1a1a",
-    "purple": "#2d1a4a",
-    "grey":   "#2d2d2d",
+    "blue":   "#0f2540",
+    "green":  "#0f2d1e",
+    "orange": "#2e1d06",
+    "red":    "#2e1010",
+    "purple": "#1e1030",
+    "grey":   "#1e1e28",
 }
 COLOR_BORDER = {
     "blue":   "#4A90D9",
@@ -210,36 +235,83 @@ COLOR_BORDER = {
     "grey":   "#7F8C8D",
 }
 
+CLUSTER_ACCENT_COLORS = {
+    "A": "#4a90d9",
+    "B": "#2ecc71",
+    "C": "#f39c12",
+    "D": "#9b59b6",
+    "E": "#e74c3c",
+}
+
 for col_widget, cluster_key in zip(board_cols, active_keys):
     with col_widget:
         label = cluster_labels.get(cluster_key, cluster_key)
-        st.markdown(f"### {label}")
-        st.caption(f"{len(clusters[cluster_key])} item(s)")
+        count = len(clusters[cluster_key])
+        accent = CLUSTER_ACCENT_COLORS.get(cluster_key, "#4a90d9")
+
+        st.markdown(f"""
+<div style="
+    border-bottom:2px solid {accent};
+    padding-bottom:9px;
+    margin-bottom:14px;
+    display:flex;
+    align-items:baseline;
+    justify-content:space-between;
+">
+    <span style="font-size:0.9rem;font-weight:700;color:#e8eaf0;letter-spacing:-0.01em;">{label}</span>
+    <span style="font-size:0.72rem;color:{accent};font-weight:700;
+                 background:rgba(74,144,217,0.1);
+                 padding:2px 8px;border-radius:10px;">{count}</span>
+</div>
+""", unsafe_allow_html=True)
 
         for row in clusters[cluster_key]:
             cid = row["canvas_item_id"]
             color = row["color"] or "blue"
-            bg = COLOR_BG.get(color, "#1e3a5f")
+            bg = COLOR_BG.get(color, "#0f2540")
             border = COLOR_BORDER.get(color, "#4A90D9")
 
             # Card HTML
             title_safe = row["title"].replace('"', "&quot;")
-            summary_short = (row["ai_summary"] or row["body"] or "")[:140]
-            summary_html = f"<p style='margin:4px 0 0;font-size:12px;color:#aaa;'>{summary_short}{'…' if len(summary_short) == 140 else ''}</p>" if summary_short else ""
+            summary_short = (row["ai_summary"] or row["body"] or "")[:120]
+            summary_html = (
+                f'<p style="margin:6px 0 0;font-size:0.78rem;color:#8b92a5;line-height:1.45;">'
+                f'{summary_short}{"…" if len(summary_short) == 120 else ""}</p>'
+            ) if summary_short else ""
 
-            rating_stars = "★" * (row["impact_rating"] or 0) if row["impact_rating"] else ""
+            note_html = ""
+            if row.get("note"):
+                note_preview = row["note"][:70] + ("…" if len(row["note"]) > 70 else "")
+                note_html = (
+                    f'<p style="margin:5px 0 0;font-size:0.75rem;color:#7eb8f7;font-style:italic;">'
+                    f'{note_preview}</p>'
+                )
+
+            rating_html = (
+                f'<span style="color:{border};font-size:0.72rem;font-weight:600;margin-left:5px;">'
+                f'{"★" * row["impact_rating"]}</span>'
+            ) if row.get("impact_rating") else ""
+
+            ct_name = row["content_type_name"] or ""
 
             card_html = f"""
 <div style="
     background:{bg};
-    border-left:4px solid {border};
-    border-radius:6px;
-    padding:10px 12px;
-    margin-bottom:10px;
+    border:1px solid {border}44;
+    border-top:3px solid {border};
+    border-radius:8px;
+    padding:12px 14px;
+    margin-bottom:8px;
+    box-shadow:0 2px 8px rgba(0,0,0,0.3);
 ">
-    <div style="font-size:14px;font-weight:600;color:#eee;">{title_safe}</div>
-    <div style="font-size:11px;color:{border};margin-top:2px;">{row['content_type_name'] or ''} {rating_stars}</div>
-    {summary_html}
+    <div style="font-size:0.875rem;font-weight:600;color:#eee;line-height:1.35;margin-bottom:4px;">
+        {title_safe}
+    </div>
+    <div style="font-size:0.72rem;color:{border};font-weight:600;
+                text-transform:uppercase;letter-spacing:0.05em;">
+        {ct_name}{rating_html}
+    </div>
+    {summary_html}{note_html}
 </div>
 """
             st.markdown(card_html, unsafe_allow_html=True)

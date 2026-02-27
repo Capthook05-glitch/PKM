@@ -14,6 +14,7 @@ Items without a URL show their saved body text instead.
 
 import streamlit as st
 
+from styles import inject_css
 from database import (
     add_highlight,
     get_conn,
@@ -25,10 +26,50 @@ from utils import fetch_article_content, format_date, parse_tags
 
 st.set_page_config(page_title="Reader", layout="wide")
 
+inject_css()
+
+# Reading-specific typography override
+st.markdown("""
+<style>
+/* Article body paragraphs — constrain width + Lora font */
+.reading-body p {
+    font-family: 'Lora', Georgia, serif !important;
+    font-size: 1.08rem !important;
+    line-height: 1.78 !important;
+    color: #d5d8e8 !important;
+    max-width: 70ch;
+}
+/* Target the reading column's markdown containers */
+[data-testid="stHorizontalBlock"] > [data-testid="stColumn"]:first-child
+    [data-testid="stMarkdownContainer"] p {
+    font-family: 'Lora', Georgia, serif !important;
+    font-size: 1.06rem !important;
+    line-height: 1.78 !important;
+    color: #d5d8e8 !important;
+    max-width: 70ch;
+}
+[data-testid="stHorizontalBlock"] > [data-testid="stColumn"]:first-child
+    [data-testid="stMarkdownContainer"] h1,
+[data-testid="stHorizontalBlock"] > [data-testid="stColumn"]:first-child
+    [data-testid="stMarkdownContainer"] h2,
+[data-testid="stHorizontalBlock"] > [data-testid="stColumn"]:first-child
+    [data-testid="stMarkdownContainer"] h3 {
+    font-family: 'Inter', sans-serif !important;
+    color: #e8eaf0 !important;
+}
+</style>
+""", unsafe_allow_html=True)
+
 init_db()
 
-st.title("Reader")
-st.caption("Read without distraction. Clip highlights as you go.")
+st.markdown("""
+<div style="margin-bottom:20px;padding-bottom:16px;border-bottom:1px solid #1e1f2e;">
+    <h1 style="font-size:1.75rem;font-weight:700;color:#e8eaf0;margin:0 0 4px;">Reader</h1>
+    <p style="color:#525870;font-size:0.875rem;margin:0;">
+        Read without distraction. Clip highlights as you go.
+    </p>
+</div>
+""", unsafe_allow_html=True)
 
 # ─── Sidebar: item selector ────────────────────────────────────────────────────
 
@@ -85,24 +126,36 @@ if not item:
     st.error("Item not found.")
     st.stop()
 
-# ─── Article content area ──────────────────────────────────────────────────────
+# ─── Article header ────────────────────────────────────────────────────────────
 
 ct = item["content_type_name"] or "Unknown"
-tag_str = "  ".join(f"`{t}`" for t in item_tags) if item_tags else "*no tags*"
 
-# Header
-st.markdown(f"## {item['title']}")
-st.caption(
-    f"`{ct}` &nbsp;·&nbsp; {format_date(item['created_at'])}"
-    + (f" &nbsp;·&nbsp; {tag_str}" if item_tags else "")
+tag_pill_str = "".join(
+    f'<span style="background:rgba(74,144,217,0.12);color:#7eb8f7;border-radius:4px;'
+    f'padding:2px 7px;font-size:0.77rem;margin-right:5px;display:inline-block;">{t}</span>'
+    for t in item_tags
+) if item_tags else ""
+
+url_link = (
+    f'<a href="{item["url"]}" target="_blank" style="color:#4a90d9;font-size:0.85rem;'
+    f'text-decoration:none;">Open original ↗</a>'
+    if item["url"] else ""
 )
 
-if item["url"]:
-    st.markdown(f"[Open original]({item['url']})  ↗")
+st.markdown(f"""
+<div style="margin-bottom:24px;padding-bottom:18px;border-bottom:1px solid #1e1f2e;">
+    <div style="font-size:0.72rem;font-weight:700;text-transform:uppercase;
+                letter-spacing:0.08em;color:#525870;margin-bottom:8px;">
+        {ct} &nbsp;·&nbsp; {format_date(item['created_at'])}
+    </div>
+    <h1 style="font-size:1.55rem;font-weight:700;color:#e8eaf0;
+               line-height:1.25;margin:0 0 10px 0;">{item['title']}</h1>
+    {"<div style='margin-bottom:10px;'>" + tag_pill_str + "</div>" if tag_pill_str else ""}
+    {url_link}
+</div>
+""", unsafe_allow_html=True)
 
-st.markdown("---")
-
-# ── Main reading content ───────────────────────────────────────────────────────
+# ─── AI summary ────────────────────────────────────────────────────────────────
 
 if item["ai_summary"] or item["ai_insight"]:
     with st.expander("AI summary & insight", expanded=False):
@@ -111,8 +164,9 @@ if item["ai_summary"] or item["ai_insight"]:
         if item["ai_insight"]:
             st.info(f"**Actionable insight:** {item['ai_insight']}")
 
+# ─── Main reading content ──────────────────────────────────────────────────────
+
 if item["url"]:
-    # Fetch article
     cache_key = f"reader_content_{selected_id}"
 
     if cache_key not in st.session_state:
@@ -128,14 +182,40 @@ if item["url"]:
             st.markdown("Showing saved notes instead:")
             st.markdown(item["body"])
     else:
-        # Render the article in a clean scrollable container
-        # We split into paragraphs for readability
+        total_chars = len(result["text"])
         paragraphs = [p for p in result["text"].split("\n\n") if p.strip()]
+
+        # Reading progress bar
+        read_key = f"reader_pos_{selected_id}"
+        pos = st.session_state.get(read_key, 0)
+        pct = min(pos / max(total_chars, 1), 1.0)
+
+        st.markdown(f"""
+<div style="margin-bottom:16px;">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+        <span style="font-size:0.7rem;font-weight:700;text-transform:uppercase;
+                     letter-spacing:0.07em;color:#525870;">Reading progress</span>
+        <span style="font-size:0.75rem;color:#4a90d9;font-weight:600;">
+            {int(pct*100)}%
+        </span>
+    </div>
+    <div style="height:4px;background:#1e1f2e;border-radius:100px;overflow:hidden;">
+        <div style="width:{pct*100:.1f}%;height:4px;
+                    background:linear-gradient(90deg,#4a90d9,#7eb8f7);
+                    border-radius:100px;transition:width 0.3s;"></div>
+    </div>
+</div>
+""", unsafe_allow_html=True)
 
         col_read, col_pad = st.columns([3, 1])
         with col_read:
             for para in paragraphs:
                 st.markdown(para)
+
+        # Mark progress button at end of article
+        if st.button("Mark as read", key=f"mark_read_{selected_id}", type="secondary"):
+            st.session_state[read_key] = total_chars
+            st.rerun()
 
 elif item["body"]:
     col_read, col_pad = st.columns([3, 1])
@@ -146,12 +226,27 @@ else:
 
 # ─── Clip a highlight ──────────────────────────────────────────────────────────
 
-st.markdown("---")
+st.markdown("<hr>", unsafe_allow_html=True)
+
+st.markdown("""
+<div style="
+    background:rgba(74,144,217,0.08);
+    border:1px solid rgba(74,144,217,0.25);
+    border-radius:8px;
+    padding:10px 16px;
+    margin-bottom:16px;
+    display:flex;
+    align-items:center;
+    gap:10px;
+">
+    <span style="font-size:1.1rem;">✂️</span>
+    <span style="font-size:0.875rem;color:#7eb8f7;">
+        Select text in the article, copy it (Ctrl+C / Cmd+C), then paste it below to save as a highlight.
+    </span>
+</div>
+""", unsafe_allow_html=True)
+
 st.subheader("Clip a highlight")
-st.caption(
-    "Select text in the article above, copy it, and paste it here. "
-    "It will be saved as a highlight linked to this item."
-)
 
 if st.session_state.get("clip_saved_msg"):
     st.success(st.session_state.pop("clip_saved_msg"))
