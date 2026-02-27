@@ -804,6 +804,30 @@ def get_weekly_captures(
     return items, highlights
 
 
+# ─── Graph ────────────────────────────────────────────────────────────────────
+
+def get_graph_data(conn: sqlite3.Connection) -> tuple:
+    """
+    Return (items, links) for the visual graph page.
+    items: list of dicts {id, title, content_type_name}
+    links: list of dicts {source_id, target_id, relationship_label}
+    """
+    items = conn.execute(
+        """
+        SELECT i.id, i.title, ct.name AS content_type_name
+        FROM items i
+        LEFT JOIN content_types ct ON ct.id = i.content_type_id
+        ORDER BY i.created_at DESC
+        """
+    ).fetchall()
+
+    links = conn.execute(
+        "SELECT source_id, target_id, relationship_label FROM item_links"
+    ).fetchall()
+
+    return [dict(r) for r in items], [dict(r) for r in links]
+
+
 # ─── Stats ────────────────────────────────────────────────────────────────────
 
 def get_stats(conn: sqlite3.Connection) -> dict:

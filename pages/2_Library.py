@@ -249,26 +249,46 @@ def _render_related_section(item_id: int, related_items: list) -> None:
 
 def _render_links_section(item_id: int, links: list, all_items_unfiltered: list) -> None:
     """
-    Show existing manual links (with remove buttons) and a form to add new ones.
-    Links are directional:  → means this item is the source  ← means it's the target.
+    Show existing manual links split into outgoing and incoming (backlinks),
+    with remove buttons, plus a form to add new links.
     """
     st.markdown("---")
     st.markdown("**Links**")
 
-    if links:
-        for link in links:
-            arrow = "→" if link["is_outgoing"] else "←"
+    outgoing = [lnk for lnk in links if lnk["is_outgoing"]]
+    incoming = [lnk for lnk in links if not lnk["is_outgoing"]]
+
+    if outgoing:
+        st.markdown("*Links to →*")
+        for link in outgoing:
             label = link["relationship_label"] or "linked"
             txt_col, rm_col = st.columns([10, 1])
             with txt_col:
-                st.markdown(f"{arrow} **{link['other_title']}** &nbsp; _{label}_")
+                st.markdown(f"→ **{link['other_title']}** &nbsp; _{label}_")
             with rm_col:
                 if st.button("✕", key=f"rm_link_{link['id']}", help="Remove this link"):
                     conn = get_conn()
                     delete_item_link(conn, link["id"])
                     conn.close()
                     st.rerun()
-    else:
+
+    if incoming:
+        if outgoing:
+            st.markdown("")
+        st.markdown("*Linked from ←*")
+        for link in incoming:
+            label = link["relationship_label"] or "linked"
+            txt_col, rm_col = st.columns([10, 1])
+            with txt_col:
+                st.markdown(f"← **{link['other_title']}** &nbsp; _{label}_")
+            with rm_col:
+                if st.button("✕", key=f"rm_link_{link['id']}", help="Remove this link"):
+                    conn = get_conn()
+                    delete_item_link(conn, link["id"])
+                    conn.close()
+                    st.rerun()
+
+    if not outgoing and not incoming:
         st.caption("No manual links yet.")
 
     # Add-link form (always visible, no nesting required)
