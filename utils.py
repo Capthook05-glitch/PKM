@@ -161,3 +161,110 @@ def digest_to_markdown(digest_text: str, days: int = 7) -> str:
 def safe_filename(text: str, max_len: int = 40) -> str:
     """Turn arbitrary text into a safe lowercase filename (no extension)."""
     return "".join(c if c.isalnum() else "_" for c in text[:max_len]).lower().strip("_")
+
+
+def fetch_article_content(url: str) -> dict:
+    """
+    Fetch and extract the main readable text from an article URL.
+    Returns {"title": str, "text": str, "error": str|None}.
+    Uses BeautifulSoup heuristics to find the main body (article/main tag).
+    """
+    import re
+
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/122.0.0.0 Safari/537.36"
+        )
+    }
+    try:
+        resp = requests.get(url, timeout=10, headers=headers)
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, "html.parser")
+
+        # Remove noisy elements
+        for tag in soup(["script", "style", "nav", "footer", "header", "aside",
+                         "form", "noscript", "iframe", "svg"]):
+            tag.decompose()
+
+        title_tag = soup.find("title")
+        title = title_tag.string.strip() if title_tag and title_tag.string else ""
+
+        # Try to isolate the article body
+        main = (
+            soup.find("article")
+            or soup.find("main")
+            or soup.find(id=lambda x: x and any(k in x.lower() for k in ["article", "content", "post", "story"]))
+            or soup.find(class_=lambda x: x and any(k in " ".join(x).lower() for k in ["article", "post-content", "entry-content", "story"]))
+        )
+        body = main or soup.find("body")
+        text = body.get_text(separator="\n", strip=True) if body else ""
+
+        # Collapse excessive blank lines
+        text = re.sub(r"\n{3,}", "\n\n", text)
+        text = text[:20000]  # cap to keep things fast
+
+        return {"title": title, "text": text, "error": None}
+    except Exception as exc:
+        return {"title": "", "text": "", "error": str(exc)}
+
+
+def parse_kindle_clippings(raw: str) -> list:
+    """
+    Parse a Kindle My Clippings.txt file into a list of highlight dicts.
+
+    Each dict:
+      {title, author, location, added_on, text}
+
+    The file format separates entries with '==========' lines.
+    Entry structure:
+      Line 1: Book Title (Author Name)
+      Line 2: - Your Highlight on Location 1234-1236 | Added on <date>
+      Line 3: (blank)
+      Line 4+: Highlight text
+    """
+    import re
+
+    highlights = []
+    entries = [e.strip() for e in raw.split("==========") if e.strip()]
+
+    for entry in entries:
+        lines = [l.strip() for l in entry.splitlines() if l.strip()]
+        if len(lines) < 3:
+            continue
+
+        # Line 0: "Title (Author)" — author part is optional
+        header = lines[0]
+        author_match = re.search(r"\(([^)]+)\)\s*$", header)
+        author = author_match.group(1) if author_match else ""
+        title = header[: author_match.start()].strip() if author_match else header
+
+        # Line 1: metadata (location / date)
+        meta = lines[1]
+        loc_match = re.search(r"[Ll]ocation (\S+)", meta)
+        location = loc_match.group(1) if loc_match else ""
+        date_match = re.search(r"Added on (.+)$", meta)
+        added_on = date_match.group(1).strip() if date_match else ""
+
+        # Skip non-highlight entries (bookmarks, notes without text)
+        if "Bookmark" in meta or "Note" in meta:
+            continue
+
+        # Remaining lines are the highlight text
+        text = " ".join(lines[2:]).strip()
+        if not text:
+            continue
+
+        source = f"{title}" + (f", {author}" if author else "") + (f" — loc. {location}" if location else "")
+
+        highlights.append({
+            "title": title,
+            "author": author,
+            "location": location,
+            "added_on": added_on,
+            "text": text,
+            "source_info": source,
+        })
+
+    return highlights

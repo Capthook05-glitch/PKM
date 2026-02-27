@@ -22,6 +22,7 @@ Each card lets you:
 import streamlit as st
 from datetime import date
 
+from styles import inject_css
 from ai import process_item, process_highlight
 from database import (
     init_db,
@@ -43,10 +44,16 @@ from utils import format_date
 
 st.set_page_config(page_title="Daily Review", layout="wide")
 
+inject_css()
 init_db()
 
-st.title("Daily Review")
-st.caption(date.today().strftime("%A, %B %-d, %Y"))
+today_str = date.today().strftime("%A, %B %-d, %Y")
+st.markdown(f"""
+<div style="margin-bottom:20px;padding-bottom:16px;border-bottom:1px solid #1e1f2e;">
+    <h1 style="font-size:1.75rem;font-weight:700;color:#e8eaf0;margin:0 0 4px;">Daily Review</h1>
+    <p style="color:#525870;font-size:0.875rem;margin:0;">{today_str}</p>
+</div>
+""", unsafe_allow_html=True)
 
 # ─── Session-stable daily selection ───────────────────────────────────────────
 # We store only the IDs in session state. The actual data is re-read from the
@@ -117,11 +124,28 @@ conn.close()
 
 # ─── Card renderers ────────────────────────────────────────────────────────────
 
+def _tag_pills(tags: list) -> str:
+    if not tags:
+        return ""
+    return "".join(
+        f'<span style="background:rgba(74,144,217,0.12);color:#7eb8f7;border-radius:4px;'
+        f'padding:2px 8px;font-size:0.77rem;margin-right:4px;display:inline-block;">{t}</span>'
+        for t in tags
+    )
+
+
 def _render_card_content_item(item, tags: list) -> None:
     """The top portion of an item review card (content, not actions)."""
     ct = item["content_type_name"] or "Unknown"
-    st.caption(f"`{ct}` · {format_date(item['created_at'])}")
-    st.markdown(f"#### {item['title']}")
+
+    st.markdown(f"""
+<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap;">
+    <span style="background:rgba(74,144,217,0.15);color:#7eb8f7;border-radius:5px;
+                 padding:2px 8px;font-size:0.73rem;font-weight:600;">{ct}</span>
+    <span style="color:#525870;font-size:0.8rem;">{format_date(item['created_at'])}</span>
+</div>
+<h4 style="font-size:1.05rem;font-weight:600;color:#e8eaf0;margin:0 0 10px;">{item['title']}</h4>
+""", unsafe_allow_html=True)
 
     has_ai = bool(item["ai_summary"] or item["ai_insight"])
 
@@ -137,10 +161,10 @@ def _render_card_content_item(item, tags: list) -> None:
         st.caption("No content or summary yet.")
 
     if item["url"]:
-        st.caption(f"[Source URL]({item['url']})")
+        st.markdown(f'<a href="{item["url"]}" target="_blank" style="color:#4a90d9;font-size:0.82rem;text-decoration:none;">Source ↗</a>', unsafe_allow_html=True)
 
     if tags:
-        st.markdown("**Tags:** " + " ".join(f"`{t}`" for t in tags))
+        st.markdown(f'<div style="margin-top:8px;">{_tag_pills(tags)}</div>', unsafe_allow_html=True)
 
 
 def _render_card_content_highlight(h, tags: list) -> None:
@@ -149,12 +173,25 @@ def _render_card_content_highlight(h, tags: list) -> None:
     if h["source_info"]:
         meta_parts.append(h["source_info"])
     if h["parent_item_title"]:
-        meta_parts.append(f"from: {h['parent_item_title']}")
+        meta_parts.append(f"from {h['parent_item_title']}")
 
     meta_str = " · ".join(meta_parts) if meta_parts else ""
-    st.caption(f"Highlight · {format_date(h['created_at'])}" + (f" · {meta_str}" if meta_str else ""))
+    date_str = format_date(h["created_at"])
+    meta_html = f'<div style="font-size:0.8rem;color:#525870;margin-top:8px;">— {meta_str}</div>' if meta_str else ""
 
-    st.markdown(f"> {h['text']}")
+    st.markdown(f"""
+<div style="margin-bottom:4px;">
+    <div style="font-size:0.7rem;font-weight:700;text-transform:uppercase;
+                letter-spacing:0.07em;color:#525870;margin-bottom:10px;">
+        Highlight &nbsp;·&nbsp; {date_str}
+    </div>
+    <div style="border-left:3px solid #4a90d9;padding:10px 0 10px 18px;">
+        <p style="font-size:1.02rem;font-style:italic;color:#e8eaf0;
+                  line-height:1.65;margin:0;">{h['text']}</p>
+    </div>
+    {meta_html}
+</div>
+""", unsafe_allow_html=True)
 
     has_ai = bool(h["ai_summary"] or h["ai_insight"])
     if has_ai:
@@ -164,7 +201,7 @@ def _render_card_content_highlight(h, tags: list) -> None:
             st.info(f"**Insight:** {h['ai_insight']}")
 
     if tags:
-        st.markdown("**Tags:** " + " ".join(f"`{t}`" for t in tags))
+        st.markdown(f'<div style="margin-top:8px;">{_tag_pills(tags)}</div>', unsafe_allow_html=True)
 
 
 def _render_rating_and_actions(entity_id: str, current_rating, current_synthesis, row, is_item: bool) -> None:

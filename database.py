@@ -118,7 +118,41 @@ def init_db() -> None:
             relationship_label TEXT,
             created_at         TEXT DEFAULT (datetime('now'))
         );
+
+        -- Named canvases (Heptabase-style idea boards).
+        CREATE TABLE IF NOT EXISTS canvases (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            name        TEXT NOT NULL,
+            description TEXT,
+            created_at  TEXT DEFAULT (datetime('now'))
+        );
+
+        -- Items pinned to a canvas, organised into named clusters (columns).
+        CREATE TABLE IF NOT EXISTS canvas_items (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            canvas_id   INTEGER REFERENCES canvases(id)  ON DELETE CASCADE,
+            item_id     INTEGER REFERENCES items(id)     ON DELETE CASCADE,
+            cluster     TEXT    DEFAULT 'A',
+            row_order   INTEGER DEFAULT 0,
+            color       TEXT    DEFAULT 'blue',
+            note        TEXT,
+            created_at  TEXT DEFAULT (datetime('now')),
+            UNIQUE(canvas_id, item_id)
+        );
     """)
+
+    # Add spaced-repetition columns to highlights if they don't exist yet.
+    # ALTER TABLE ADD COLUMN is idempotent in SQLite when wrapped in try/except.
+    for _ddl in [
+        "ALTER TABLE highlights ADD COLUMN sr_due_date TEXT",
+        "ALTER TABLE highlights ADD COLUMN sr_interval INTEGER DEFAULT 1",
+        "ALTER TABLE highlights ADD COLUMN sr_ease_factor REAL DEFAULT 2.5",
+        "ALTER TABLE highlights ADD COLUMN sr_repetitions INTEGER DEFAULT 0",
+    ]:
+        try:
+            conn.execute(_ddl)
+        except Exception:
+            pass
 
     for name in DEFAULT_CONTENT_TYPES:
         conn.execute(
@@ -846,3 +880,197 @@ def get_stats(conn: sqlite3.Connection) -> dict:
             "SELECT COUNT(*) FROM item_links"
         ).fetchone()[0],
     }
+
+
+# ─── Spaced repetition ────────────────────────────────────────────────────────
+
+def get_sr_due_highlights(conn: sqlite3.Connection, limit: int = 20) -> list:
+    """
+    Highlights due for spaced-repetition review.
+    Priority: never-reviewed first, then by due date ascending.
+    """
+    from datetime import datetime
+    today = datetime.utcnow().date().isoformat()
+    return conn.execute(
+        """
+        SELECT h.*, i.title AS parent_item_title
+        FROM highlights h
+        LEFT JOIN items i ON i.id = h.parent_item_id
+        WHERE h.sr_due_date IS NULL OR h.sr_due_date <= ?
+        ORDER BY
+            CASE WHEN h.sr_due_date IS NULL THEN 0 ELSE 1 END,
+            h.sr_due_date
+        LIMIT ?
+        """,
+        (today, limit),
+    ).fetchall()
+
+
+def get_sr_stats(conn: sqlite3.Connection) -> dict:
+    """Return SR queue stats for the sidebar / dashboard."""
+    from datetime import datetime
+    today = datetime.utcnow().date().isoformat()
+    due = conn.execute(
+        "SELECT COUNT(*) FROM highlights WHERE sr_due_date IS NULL OR sr_due_date <= ?",
+        (today,),
+    ).fetchone()[0]
+    total = conn.execute("SELECT COUNT(*) FROM highlights").fetchone()[0]
+    return {"due": due, "total": total}
+
+
+def update_sr_schedule(conn: sqlite3.Connection, highlight_id: int, quality: int) -> None:
+    """
+    Apply the SM-2 spaced-repetition algorithm.
+
+    quality: 0 = Again, 1 = Hard, 2 = Good, 3 = Easy
+    Internally mapped to SM-2 scale (0-5):
+        0 → 0 (complete blackout)
+        1 → 3 (correct with serious difficulty)
+        2 → 4 (correct after hesitation)
+        3 → 5 (perfect recall)
+    """
+    from datetime import datetime, timedelta
+
+    row = conn.execute(
+        "SELECT sr_interval, sr_ease_factor, sr_repetitions FROM highlights WHERE id = ?",
+        (highlight_id,),
+    ).fetchone()
+
+    interval = row["sr_interval"] or 1
+    ease     = row["sr_ease_factor"] or 2.5
+    reps     = row["sr_repetitions"] or 0
+
+    # Map button quality to SM-2 quality score
+    q = {0: 0, 1: 3, 2: 4, 3: 5}.get(quality, 4)
+
+    if q < 3:
+        # Failed — reset to beginning
+        new_interval = 1
+        new_reps = 0
+    else:
+        new_reps = reps + 1
+        if reps == 0:
+            new_interval = 1
+        elif reps == 1:
+            new_interval = 6
+        else:
+            new_interval = max(1, round(interval * ease))
+
+    # Update ease factor (SM-2 formula)
+    new_ease = ease + (0.1 - (5 - q) * (0.08 + (5 - q) * 0.02))
+    new_ease = round(max(1.3, new_ease), 2)
+
+    due_date = (datetime.utcnow().date() + timedelta(days=new_interval)).isoformat()
+
+    conn.execute(
+        """
+        UPDATE highlights
+        SET sr_due_date = ?, sr_interval = ?, sr_ease_factor = ?, sr_repetitions = ?
+        WHERE id = ?
+        """,
+        (due_date, new_interval, new_ease, new_reps, highlight_id),
+    )
+    conn.commit()
+
+
+# ─── Canvases ─────────────────────────────────────────────────────────────────
+
+def get_canvases(conn: sqlite3.Connection) -> list:
+    return conn.execute(
+        "SELECT * FROM canvases ORDER BY created_at DESC"
+    ).fetchall()
+
+
+def create_canvas(conn: sqlite3.Connection, name: str, description: str = "") -> int:
+    cur = conn.execute(
+        "INSERT INTO canvases (name, description) VALUES (?, ?)",
+        (name.strip(), description.strip() or None),
+    )
+    conn.commit()
+    return cur.lastrowid
+
+
+def delete_canvas(conn: sqlite3.Connection, canvas_id: int) -> None:
+    conn.execute("DELETE FROM canvases WHERE id = ?", (canvas_id,))
+    conn.commit()
+
+
+def get_canvas_items(conn: sqlite3.Connection, canvas_id: int) -> list:
+    """Return canvas items with full item details, ordered by cluster then row_order."""
+    return conn.execute(
+        """
+        SELECT ci.id AS canvas_item_id, ci.cluster, ci.row_order, ci.color, ci.note,
+               i.id AS item_id, i.title, i.body, i.url, i.ai_summary, i.ai_insight,
+               i.impact_rating, i.created_at,
+               ct.name AS content_type_name
+        FROM canvas_items ci
+        JOIN items i ON i.id = ci.item_id
+        LEFT JOIN content_types ct ON ct.id = i.content_type_id
+        WHERE ci.canvas_id = ?
+        ORDER BY ci.cluster, ci.row_order
+        """,
+        (canvas_id,),
+    ).fetchall()
+
+
+def add_item_to_canvas(
+    conn: sqlite3.Connection,
+    canvas_id: int,
+    item_id: int,
+    cluster: str = "A",
+    color: str = "blue",
+    note: str = "",
+) -> None:
+    """Add an item to a canvas. Silently ignores duplicates."""
+    # Find the next row_order in the target cluster
+    row = conn.execute(
+        "SELECT COALESCE(MAX(row_order), -1) + 1 FROM canvas_items WHERE canvas_id = ? AND cluster = ?",
+        (canvas_id, cluster),
+    ).fetchone()[0]
+    try:
+        conn.execute(
+            "INSERT INTO canvas_items (canvas_id, item_id, cluster, row_order, color, note) VALUES (?, ?, ?, ?, ?, ?)",
+            (canvas_id, item_id, cluster, row, color, note or None),
+        )
+        conn.commit()
+    except Exception:
+        pass
+
+
+def remove_item_from_canvas(conn: sqlite3.Connection, canvas_id: int, item_id: int) -> None:
+    conn.execute(
+        "DELETE FROM canvas_items WHERE canvas_id = ? AND item_id = ?",
+        (canvas_id, item_id),
+    )
+    conn.commit()
+
+
+def move_canvas_item_cluster(
+    conn: sqlite3.Connection,
+    canvas_item_id: int,
+    new_cluster: str,
+) -> None:
+    """Move a canvas item to a different cluster (column)."""
+    row = conn.execute(
+        "SELECT canvas_id FROM canvas_items WHERE id = ?", (canvas_item_id,)
+    ).fetchone()
+    if not row:
+        return
+    canvas_id = row["canvas_id"]
+    new_row = conn.execute(
+        "SELECT COALESCE(MAX(row_order), -1) + 1 FROM canvas_items WHERE canvas_id = ? AND cluster = ?",
+        (canvas_id, new_cluster),
+    ).fetchone()[0]
+    conn.execute(
+        "UPDATE canvas_items SET cluster = ?, row_order = ? WHERE id = ?",
+        (new_cluster, new_row, canvas_item_id),
+    )
+    conn.commit()
+
+
+def update_canvas_item_note(conn: sqlite3.Connection, canvas_item_id: int, note: str, color: str) -> None:
+    conn.execute(
+        "UPDATE canvas_items SET note = ?, color = ? WHERE id = ?",
+        (note or None, color, canvas_item_id),
+    )
+    conn.commit()

@@ -21,6 +21,7 @@ or Build.
 import streamlit as st
 from datetime import date
 
+from styles import inject_css
 from ai import build_framework, generate_weekly_digest
 from database import (
     get_conn,
@@ -33,10 +34,15 @@ from utils import digest_to_markdown, framework_to_markdown, safe_filename
 
 st.set_page_config(page_title="Digest & Framework", layout="wide")
 
+inject_css()
 init_db()
 
-st.title("Digest & Framework")
-st.caption("Turn your captures into reflections and reusable tools.")
+st.markdown("""
+<div style="margin-bottom:20px;padding-bottom:16px;border-bottom:1px solid #1e1f2e;">
+    <h1 style="font-size:1.75rem;font-weight:700;color:#e8eaf0;margin:0 0 4px;">Digest & Framework</h1>
+    <p style="color:#525870;font-size:0.875rem;margin:0;">Turn your captures into reflections and reusable tools.</p>
+</div>
+""", unsafe_allow_html=True)
 
 tab_digest, tab_framework = st.tabs(["Weekly Digest", "Build a Framework"])
 
