@@ -22,7 +22,7 @@ from database import (
     get_items,
     get_all_tags,
 )
-from utils import fetch_page_title, parse_tags
+from utils import fetch_page_title, parse_tags, parse_kindle_clippings
 
 st.set_page_config(page_title="Capture", layout="wide")
 
@@ -31,7 +31,7 @@ init_db()
 st.title("Capture")
 st.caption("Add something to your knowledge base.")
 
-tab_item, tab_highlight = st.tabs(["Item", "Highlight"])
+tab_item, tab_highlight, tab_import = st.tabs(["Item", "Highlight", "Import"])
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -251,4 +251,123 @@ with tab_highlight:
                 st.session_state.pop(key, None)
             preview = current_text[:60] + ("..." if len(current_text) > 60 else "")
             st.session_state["highlight_saved_msg"] = f'Saved highlight #{h_id}: "{preview}"'
+            st.rerun()
+
+
+# ─── Import tab ───────────────────────────────────────────────────────────────
+
+with tab_import:
+
+    st.subheader("Import from Kindle")
+    st.caption(
+        "On your Kindle, plug it in to your computer and open the `documents` folder. "
+        "Upload the **My Clippings.txt** file here to bulk-import your highlights."
+    )
+
+    uploaded = st.file_uploader("My Clippings.txt", type=["txt"], key="kindle_upload")
+
+    if uploaded:
+        raw = uploaded.read().decode("utf-8", errors="replace")
+        parsed = parse_kindle_clippings(raw)
+
+        if not parsed:
+            st.warning("No highlights found in this file. Make sure it's a valid My Clippings.txt.")
+        else:
+            st.success(f"Found **{len(parsed)} highlights** across your Kindle library.")
+
+            # Show preview
+            with st.expander(f"Preview all {len(parsed)} highlights"):
+                for i, h in enumerate(parsed[:50]):
+                    st.markdown(f"**{i+1}. {h['title']}**" + (f" — {h['author']}" if h["author"] else ""))
+                    st.markdown(f"> {h['text'][:200]}" + ("..." if len(h["text"]) > 200 else ""))
+                    st.caption(h["source_info"])
+                    st.markdown("---")
+                if len(parsed) > 50:
+                    st.caption(f"... and {len(parsed) - 50} more.")
+
+            # Dedup against existing highlights in DB
+            conn = get_conn()
+            existing_texts = {
+                row["text"].strip()
+                for row in conn.execute("SELECT text FROM highlights").fetchall()
+            }
+            conn.close()
+
+            new_highlights = [h for h in parsed if h["text"].strip() not in existing_texts]
+            dupes = len(parsed) - len(new_highlights)
+
+            if dupes:
+                st.info(f"{dupes} highlight(s) already in your library will be skipped.")
+
+            if not new_highlights:
+                st.success("All highlights are already in your library — nothing to import.")
+            else:
+                st.markdown(f"**{len(new_highlights)} new highlights** ready to import.")
+                tags_for_import = st.text_input(
+                    "Tags to apply to all imported highlights (comma-separated, optional)",
+                    key="kindle_tags",
+                    placeholder="kindle, reading, book",
+                )
+                if st.button("Import All", type="primary", key="kindle_import_btn"):
+                    tag_list = parse_tags(tags_for_import)
+                    conn = get_conn()
+                    for h in new_highlights:
+                        add_highlight(
+                            conn,
+                            text=h["text"],
+                            source_info=h["source_info"] or None,
+                            parent_item_id=None,
+                            tag_names=tag_list,
+                        )
+                    conn.close()
+                    st.session_state["kindle_imported"] = len(new_highlights)
+                    st.rerun()
+
+    if st.session_state.get("kindle_imported"):
+        n = st.session_state.pop("kindle_imported")
+        st.success(f"Imported {n} highlights. Head to the Library to browse them.")
+
+    st.markdown("---")
+    st.subheader("Paste highlights (any format)")
+    st.caption(
+        "Paste highlights line by line — one highlight per paragraph — to bulk-add them quickly. "
+        "Each non-empty paragraph becomes one highlight."
+    )
+
+    bulk_text = st.text_area(
+        "Paste highlights here",
+        key="bulk_paste",
+        height=200,
+        placeholder="Paste your highlights here, separated by blank lines...",
+    )
+    bulk_source = st.text_input(
+        "Source (optional — applies to all)",
+        key="bulk_source",
+        placeholder="Thinking, Fast and Slow — Daniel Kahneman",
+    )
+    bulk_tags = st.text_input(
+        "Tags (comma-separated, optional)",
+        key="bulk_tags",
+        placeholder="book, psychology",
+    )
+
+    if st.button("Import pasted highlights", type="primary", key="bulk_import_btn"):
+        paragraphs = [p.strip() for p in bulk_text.split("\n\n") if p.strip()]
+        if not paragraphs:
+            st.error("Paste at least one highlight.")
+        else:
+            tag_list = parse_tags(bulk_tags)
+            conn = get_conn()
+            for para in paragraphs:
+                add_highlight(
+                    conn,
+                    text=para,
+                    source_info=bulk_source.strip() or None,
+                    parent_item_id=None,
+                    tag_names=tag_list,
+                )
+            conn.close()
+            st.success(f"Imported {len(paragraphs)} highlight(s).")
+            for k in ["bulk_paste", "bulk_source", "bulk_tags"]:
+                st.session_state.pop(k, None)
             st.rerun()
